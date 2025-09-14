@@ -3,8 +3,7 @@
 #include "cmath"
 #include "omp.h"
 
-// Linear equations system solution with Gaussian elimination
-extern "C" double* funcTask1(double** A, double* b, int N) 
+inline double* GaussianElimination(double** A, double* b, int N)
 {
     double* x = new double[N];
 
@@ -49,6 +48,77 @@ extern "C" double* funcTask1(double** A, double* b, int N)
 
     return x;
 }
+
+inline double* LUFactorization(double** A, double* b, int N)
+{
+    double* __restrict__ A_flat = new double[N * N];
+
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < N; ++j)
+            A_flat[i * N + j] = A[i][j];
+
+    for (int k = 0; k < N; ++k) 
+    {
+        int maxIdx = k; 
+        double maxVal = std::abs(A_flat[k * N + k]); 
+        for (int i = k + 1; i < N; ++i) 
+        { 
+            if (std::abs(A_flat[i * N + k]) > maxVal) 
+            { 
+                maxVal = std::abs(A_flat[i * N + k]); 
+                maxIdx = i; 
+            } 
+        } 
+
+        if (maxIdx != k) 
+        {
+            for (int j = 0; j < N; ++j) 
+                std::swap(A_flat[k * N + j], A_flat[maxIdx * N + j]);
+
+            std::swap(b[k], b[maxIdx]); 
+        }
+
+        // LU factorization 
+        double inv = 1.0 / A_flat[k * N + k];
+        #pragma omp parallel for
+        for (int i = k + 1; i < N; ++i) 
+        {
+            __builtin_prefetch(&A_flat[i * N + k], 0, 1);
+            A_flat[i * N + k] *= inv; 
+            for (int j = k + 1; j < N; ++j) 
+                A_flat[i * N + j] -= A_flat[i * N + k] * A_flat[k * N + j]; 
+        } 
+    } 
+
+    // Forward substitution 
+    for (int i = 0; i < N; ++i) 
+    { 
+        for (int j = 0; j < i; ++j) 
+            b[i] -= A_flat[i * N + j] * b[j]; 
+    } 
+
+    double* x = new double[N];
+    // Back substitution
+    for (int i = N - 1; i >= 0; --i) 
+    { 
+        double sum = b[i]; 
+        for (int j = i + 1; j < N; ++j) 
+            sum -= A_flat[i * N + j] * x[j]; 
+        x[i] = sum / A_flat[i * N + i]; 
+    }
+
+    delete[] A_flat;
+
+    return x;
+}
+
+// Linear equations system solution with Gaussian elimination
+extern "C" double* funcTask1(double** A, double* b, int N) 
+{
+    return LUFactorization(A,b,N);
+}
+
+///////////////////////////////////////////////////////////////
 
 // Matrix determinant calculation with LU decomposition
 extern "C" long int funcTask2(int **M, int N)
@@ -114,28 +184,33 @@ extern "C" long int funcTask2(int **M, int N)
     return static_cast<long int>(std::round(det));
 }
 
+///////////////////////////////////////////////////////////////
+
+long double** SimpleMultiplication(float **A, float **B, int N)
+{
+    long double a_ik;
+    long double** C = new long double*[N];
+
+    #pragma omp parallel for num_threads(3) 
+    for(int i = 0; i < N; i++) 
+    { 
+        C[i] = new long double[N]{0}; 
+        for(int k = 0; k < N; k++) 
+        {
+            a_ik = (long double)A[i][k]; 
+            for(int j = 0; j < N; j++) 
+            {
+                C[i][j] += a_ik * static_cast<long double>(B[k][j]); 
+            } 
+        } 
+    }
+
+    return C;
+}
+
 // Non naive matixes multiplication
 extern "C" long double** funcTask3(float **A, float **B, int N)
 {
-    // "simple" variant
-    // long double a_ik;
-    // long double** C = new long double*[N];
-
-    // #pragma omp parallel for num_threads(3) 
-    // for(int i = 0; i < N; i++) 
-    // { 
-    //     C[i] = new long double[N]{0}; 
-    //     for(int k = 0; k < N; k++) 
-    //     {
-    //         a_ik = (long double)A[i][k]; 
-    //         for(int j = 0; j < N; j++) 
-    //         {
-    //             C[i][j] += a_ik * static_cast<long double>(B[k][j]); 
-    //         } 
-    //     } 
-    // }
-
-    // "overoptimized" variant
     long double** C = (long double**)aligned_alloc(64, N * sizeof(long double*));
 
     long double* Cblock = (long double*)aligned_alloc(64, N * N * sizeof(long double));
